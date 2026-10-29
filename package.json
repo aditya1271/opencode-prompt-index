@@ -1,0 +1,62 @@
+{
+  "name": "opencode-prompt-index",
+  "version": "0.1.0",
+  "description": "OpenCode V2 TUI plugin: numbered index of your prompts in the sidebar, click one to jump to it",
+  "type": "module",
+  "license": "MIT",
+  "author": "Aditya Aggarwal",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aditya1271/opencode-prompt-index.git"
+  },
+  "homepage": "https://github.com/aditya1271/opencode-prompt-index#readme",
+  "bugs": {
+    "url": "https://github.com/aditya1271/opencode-prompt-index/issues"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "plugin",
+    "sidebar",
+    "navigation"
+  ],
+  "exports": {
+    "./tui": "./src/tui.tsx"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p ."
+  },
+  "peerDependencies": {
+    "@opencode/plugin": ">=2.2.0 <3",
+    "@opentui/core": ">=0.6.6 <1",
+    "@opentui/solid": ">=0.6.6 <1",
+    "solid-js": ">=1.9.0 <2"
+  },
+  "peerDependenciesMeta": {
+    "@opencode/plugin": {
+      "optional": true
+    },
+    "@opentui/core": {
+      "optional": true
+    },
+    "@opentui/solid": {
+      "optional": true
+    },
+    "solid-js": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@opencode/plugin": "2.2.0",
+    "@opentui/core": "^0.7.0",
+    "@opentui/solid": "^0.7.0",
+    "@types/node": "^22.0.0",
+    "solid-js": "^1.9.0",
+    "typescript": "^5.6.0"
+  }
+}

@@ -26,6 +26,8 @@ prompt to jump the transcript to it.
   opens a searchable list of every prompt. Pick one to jump to it.
 - **Collapsible**: click the `▼ Prompts` header to collapse the section. This is saved across restarts.
 - **Revert aware**: prompts hidden by `/undo` are left out.
+- **Complete after a restart**: when OpenCode reopens a session it loads only the newest messages, so `/timeline` shows
+  only the latest prompts until you scroll up. The index asks the server for every prompt instead, so it stays complete.
 
 ## Install
 
@@ -67,6 +69,8 @@ the message ID as its renderable ID, so the plugin finds that row and scrolls th
   `session.messages_last_user` once, which makes OpenCode render the whole session, then scrolls to the row. That
   render is a one-time cost, the same as going far back with `/timeline`. It stays rendered while you're scrolled up,
   so later jumps are instant again until you return to the bottom.
+- **Prompt not loaded yet** (after a restart): the plugin first has OpenCode load the rest of the session, the same
+  way its own "jump to first message" does, then jumps as above.
 - **Fallback**: if the transcript can't be found, for example after an OpenCode update changes its layout, the plugin
   steps there with `session.message.user.previous`, which is correct but slow for long jumps.
 

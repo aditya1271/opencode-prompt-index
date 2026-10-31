@@ -64,15 +64,25 @@ const firstLine = (text: string) =>
 
 /**
  * Prompts numbered the way the TUI's own "user message" navigation counts them: user messages with non-empty text.
- * Messages from a staged revert onward are hidden in the transcript, so they are left out too.
+ * `fetched` are the session's user messages from the server; `cached` is the TUI's message list, which holds only the
+ * newest page after a restart but also has prompts sent since the fetch. Messages from a staged revert onward are hidden
+ * in the transcript, so they are left out too.
  */
 const promptsOf = (
-  messages: readonly SessionMessageInfo[],
+  fetched: readonly SessionMessageInfo[],
+  cached: readonly SessionMessageInfo[],
   revertID: string | undefined,
   previous: ReadonlyMap<string, Prompt>,
 ): Prompt[] => {
-  const cut = revertID ? messages.findIndex((message) => message.id === revertID) : -1
-  const shown = cut === -1 ? messages : messages.slice(0, cut)
+  const byID = new Map<string, SessionMessageInfo>()
+  for (const message of fetched) byID.set(message.id, message)
+  for (const message of cached) if (message.type === "user") byID.set(message.id, message)
+  const revertAt = revertID
+    ? (cached.find((message) => message.id === revertID) ?? byID.get(revertID))?.time.created
+    : undefined
+  const shown = [...byID.values()]
+    .filter((message) => revertAt === undefined || message.time.created < revertAt)
+    .sort((a, b) => a.time.created - b.time.created)
   const prompts: Prompt[] = []
   for (const message of shown) {
     if (message.type !== "user" || !message.text.trim()) continue
@@ -158,8 +168,39 @@ export default Plugin.define({
       return true
     }
 
+    /** Every user message of the session, oldest first, straight from the server (200 per page). */
+    const fetchUserMessages = async (sessionID: string) => {
+      const all: SessionMessageInfo[] = []
+      let cursor: string | undefined
+      do {
+        const page = await context.client.message.list(
+          cursor ? { sessionID, type: "user", limit: 200, cursor } : { sessionID, type: "user", limit: 200, order: "asc" },
+        )
+        all.push(...page.data)
+        cursor = page.cursor.next ?? undefined
+      } while (cursor)
+      return all
+    }
+
+    /**
+     * After a restart the TUI holds only the newest page of messages and loads older ones as you scroll up. Its store
+     * (the same object as context.data) can load them all at once, as the built-in "jump to first message" does;
+     * that method isn't in the plugin types, so it's used only when present.
+     */
+    const loadAllMessages = async (sessionID: string) => {
+      const store = context.data.session.message as unknown as {
+        more?: (sessionID: string) => boolean
+        loadMore?: (sessionID: string, options?: { all?: boolean }) => Promise<void>
+      }
+      if (store.more?.(sessionID) && store.loadMore) await store.loadMore(sessionID, { all: true })
+    }
+
     const jumpTo = async (sessionID: string, prompts: readonly Prompt[], target: Prompt) => {
       const mine = ++jumpSeq
+      if (!context.data.session.message.get(sessionID, target.id)) {
+        await loadAllMessages(sessionID).catch(() => {})
+        if (mine !== jumpSeq) return
+      }
       if (!findTranscript(sessionID)) return stepTo(prompts, target)
 
       const visible = renderedRow(sessionID, target.id)
@@ -187,11 +228,16 @@ export default Plugin.define({
       }
     }
 
+    /**
+     * Acts on mouse release, like OpenCode's own buttons. A dialog opened on press could be drawn before the release
+     * (likely while a reply streams), and the release would then land on the dialog's backdrop and close it.
+     */
     function Clickable(props: { onClick: () => void; children: any }) {
       return (
         <box
           flexDirection="row"
-          onMouseDown={(event: { stopPropagation(): void }) => {
+          onMouseDown={(event: { stopPropagation(): void }) => event.stopPropagation()}
+          onMouseUp={(event: { stopPropagation(): void }) => {
             event.stopPropagation()
             props.onClick()
           }}
@@ -239,11 +285,27 @@ export default Plugin.define({
       const [tick, setTick] = createSignal(0)
       const [jumpedID, setJumpedID] = createSignal<string>()
       const [page, setPage] = createSignal(0)
+      // User messages from the server, so prompts older than the TUI's loaded page still show after a restart.
+      const [fetched, setFetched] = createSignal<{ sessionID: string; messages: SessionMessageInfo[] }>()
       let timer: ReturnType<typeof setTimeout> | undefined
+      let fetchSeq = 0
 
       const refresh = () => {
         clearTimeout(timer)
         timer = setTimeout(() => setTick((n) => n + 1), 100)
+      }
+
+      const refetch = (sessionID: string) => {
+        const mine = ++fetchSeq
+        fetchUserMessages(sessionID).then(
+          (messages) => {
+            if (mine !== fetchSeq) return
+            setFetched({ sessionID, messages })
+            refresh()
+          },
+          // Keep the last list; the TUI's own cache still covers recent prompts.
+          () => {},
+        )
       }
 
       createEffect(
@@ -254,6 +316,7 @@ export default Plugin.define({
             setPage(0)
             refresh()
             void context.data.session.message.sync(sessionID).then(refresh, () => {})
+            refetch(sessionID)
           },
         ),
       )
@@ -261,13 +324,18 @@ export default Plugin.define({
       const forThisSession = (event: { data: { sessionID: string } }) => {
         if (event.data.sessionID === props.sessionID) refresh()
       }
+      const refetchThisSession = (event: { data: { sessionID: string } }) => {
+        if (event.data.sessionID !== props.sessionID) return
+        refresh()
+        refetch(props.sessionID)
+      }
       const stops = [
-        context.data.on("session.inbox.delivered", forThisSession),
+        context.data.on("session.inbox.delivered", refetchThisSession),
         context.data.on("session.execution.started", forThisSession),
-        context.data.on("session.execution.succeeded", forThisSession),
-        context.data.on("session.revert.staged", forThisSession),
-        context.data.on("session.revert.cleared", forThisSession),
-        context.data.on("session.revert.committed", forThisSession),
+        context.data.on("session.execution.succeeded", refetchThisSession),
+        context.data.on("session.revert.staged", refetchThisSession),
+        context.data.on("session.revert.cleared", refetchThisSession),
+        context.data.on("session.revert.committed", refetchThisSession),
       ]
       onCleanup(() => {
         clearTimeout(timer)
@@ -279,9 +347,15 @@ export default Plugin.define({
         tick()
         const sessionID = props.sessionID
         return untrack(() => {
-          const messages = context.data.session.message.list(sessionID) ?? []
+          const cached = context.data.session.message.list(sessionID) ?? []
+          const server = fetched()
           const known = new Map(previous.map((prompt) => [prompt.id, prompt]))
-          return promptsOf(messages, context.data.session.get(sessionID)?.revert?.messageID, known)
+          return promptsOf(
+            server?.sessionID === sessionID ? server.messages : [],
+            cached,
+            context.data.session.get(sessionID)?.revert?.messageID,
+            known,
+          )
         })
       }, [])
       // Pages of PAGE_ROWS, newest first. Page 0 holds the latest prompts.
@@ -325,6 +399,7 @@ export default Plugin.define({
       }
 
       context.keymap.layer(() => ({
+        mode: "global",
         commands: [
           {
             id: "prompt-index.search",
